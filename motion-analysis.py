@@ -61,6 +61,21 @@ def euler_to_mat(theta):
     R = np.dot(R_z, np.dot( R_y, R_x ))
     return np.matrix(R)
 
+def mat_to_euler(R):
+        import math
+        # NOTE code taken from: https://www.learnopencv.com/rotation-matrix-to-euler-angles
+        sy = math.sqrt(R[0, 0] * R[0, 0] + R[1, 0] * R[1, 0])
+        singular = sy < 1e-6
+        if not singular:
+            x = math.atan2(R[2, 1], R[2, 2])
+            y = math.atan2(-R[2, 0], sy)
+            z = math.atan2(R[1, 0], R[0, 0])
+        else:
+            x = math.atan2(-R[1, 2], R[1, 1])
+            y = math.atan2(-R[2, 0], sy)
+            z = 0
+        return np.array([x, y, z]) # returns [pitch, yaw, roll]
+
 def dist(a, b):
     return np.linalg.norm(a-b)
 
@@ -76,8 +91,8 @@ argparser.add_argument('sequences', type=str, nargs='+', help="video indices to 
 argparser.add_argument('--batch_size', '-bs', type=int, default=8, help="batch size for transforming (default: 8)")
 argparser.add_argument('--seq_len', '-sl', type=int, default=2, help="length of sub-sequences to sample from main sequence. The direction will be computed from first to last pose in the sub-sequence. (default: 2)")
 argparser.add_argument('--skip', '-sk', type=int, default=1, help="set how many sequences should be skipped. used for faster debugging. (default: 1)")
-argparser.add_argument('--yaw', '-y', type=float, default=20, help="reference yaw angle in deg (default: 20 deg)")
-argparser.add_argument('--pitch', '-p', type=float, default=10, help="reference pitch angle in deg (default: 10 deg)")
+argparser.add_argument('--yaw', '-y', type=float, default=10, help="reference yaw angle in deg (default: 20 deg)")
+argparser.add_argument('--pitch', '-p', type=float, default=5, help="reference pitch angle in deg (default: 10 deg)")
 args = argparser.parse_args()
 
 if __name__ == '__main__':
@@ -94,12 +109,14 @@ if __name__ == '__main__':
     overlap = seq_len - 1
     print('seq_len = {},  overlap = {}'.format(seq_len, overlap))
 
-    # prepare histogram
+    # prepare histograms
     v_forward = np.matrix([[0.0],[0.0],[1.0]], dtype=np.float)
     y = args.yaw; p = args.pitch;
     ref_eulers = [ (p,0), (-p,y), (p,y), (0,y), (0,0), (0,-y), (p,-y), (-p,-y), (-p,0) ]
     ref_dirs = [ euler_to_mat(to_rad(x+(0,)))*v_forward for x in ref_eulers ]
     histogram = [0] * len(ref_eulers)
+    accum_euler = np.array([0,0,0], dtype=np.float64)
+    accum_coord = np.array([0,0,0], dtype=np.float64)
 
     # loop over sequences
     for seq in args.sequences:
@@ -132,6 +149,10 @@ if __name__ == '__main__':
                 # map to ref direction and integrate histogram
                 dists = [ dist(d,r) for r in ref_dirs ]
                 histogram[np.argmin(dists)] += 1
+                # accumulate euler angles
+                accum_euler += np.absolute(mat_to_euler(R))
+                # accumulate coordinates
+                accum_coord += np.absolute([t[0,0],t[1,0],t[2,0]])
 
         print('len(seq_motions):', len(seq_motions))
         print('exp. len:', n_poses-overlap)
@@ -140,11 +161,12 @@ if __name__ == '__main__':
         fig3d = plt.figure()
         ax = fig3d.add_subplot(1,1,1, projection='3d')
         dirs = np.asarray(seq_directions)
+        # dirs[:,0,0] *= -1; dirs[:,1,0] *= -1;
         marker_color = '#FF9F1C'
-        ax.scatter(dirs[:,0,0], dirs[:,1,0], dirs[:,2,0], c=marker_color, marker='o', alpha=0.5)
+        ax.scatter(-dirs[:,0,0], dirs[:,1,0], dirs[:,2,0], c=marker_color, marker='o', alpha=0.5)
         d = np.asarray(ref_dirs); z = np.asarray([0]*d.shape[0]);
         ax.quiver(z,z,z,d[:,0,0],d[:,1,0],d[:,2,0], normalize=True, arrow_length_ratio=0.1, length=0.75, color=marker_color, alpha=0.5)
-        ax.quiver(0,0,0,1,0,0, normalize=True, arrow_length_ratio=0.1, length=0.25, color='r')
+        ax.quiver(0,0,0,-1,0,0, normalize=True, arrow_length_ratio=0.1, length=0.25, color='r')
         ax.quiver(0,0,0,0,1,0, normalize=True, arrow_length_ratio=0.1, length=0.25, color='g')
         ax.quiver(0,0,0,0,0,1, normalize=True, arrow_length_ratio=0.1, length=0.25, color='b')
         ax.set_xlabel('X'); ax.set_xlim([-1.0,1.0]);
@@ -152,7 +174,7 @@ if __name__ == '__main__':
         ax.set_zlabel('Z'); ax.set_zlim([ 0.0,1.0]);
         ax.view_init(elev=-45.0, azim=135.0)
 
-        # 2D plots (projections)
+        # 2D trajectory plots (projections)
         fig2d = plt.figure()
         # YX view
         ax = fig2d.add_subplot(1,3,1)
@@ -169,6 +191,20 @@ if __name__ == '__main__':
         ax.scatter(dirs[:,2,0], dirs[:,1,0], c=marker_color, alpha=0.5, marker='o')
         ax.quiver(0,0,1,0, color='b', scale=4.0)
         ax.quiver(0,0,0,1, color='g', scale=4.0)
+
+        # 2D angle plots
+        figAngle = plt.figure()
+        ax = figAngle.add_subplot(1,1,1)
+        #  normalize histogram
+        max_val = max(accum_euler); accum_euler = [ x/max_val for x in accum_euler ];
+        ax.bar(['roll', 'pitch', 'yaw'], [accum_euler[2], accum_euler[0], accum_euler[1]], color=marker_color)
+
+        # 2D translation plots
+        figTrans = plt.figure()
+        ax = figTrans.add_subplot(1,1,1)
+        #  normalize histogram
+        max_val = max(accum_coord); accum_coord = [ x/max_val for x in accum_coord ];
+        ax.bar(['x', 'y', 'z'], accum_coord, color=marker_color)
 
         # histogram plot
         figHist = plt.figure()

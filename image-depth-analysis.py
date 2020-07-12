@@ -46,7 +46,8 @@ if __name__ == '__main__':
         for i, path in enumerate(im_paths):
             print('\t{} / {}'.format(i+1, n_images), end='\r', flush=True)
             im = np.asarray(Image.open(path))
-            im_var += (im - im_mean)
+            diff = (im - im_mean)
+            im_var += np.multiply(diff, diff)
         im_var /= n_images
         print(' done!')
 

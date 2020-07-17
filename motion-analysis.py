@@ -88,11 +88,11 @@ argparser = argparse.ArgumentParser(description="computes a histogram over quant
 argparser.add_argument('out', type=str, help="path where results will be saved")
 argparser.add_argument('dataset', type=str, help="dataset base directory")
 argparser.add_argument('sequences', type=str, nargs='+', help="video indices to transform")
+argparser.add_argument('--filename', '-fname', type=str, default='plot', help="filename of rendered plots")
 argparser.add_argument('--batch_size', '-bs', type=int, default=8, help="batch size for transforming (default: 8)")
 argparser.add_argument('--seq_len', '-sl', type=int, default=2, help="length of sub-sequences to sample from main sequence. The direction will be computed from first to last pose in the sub-sequence. (default: 2)")
-argparser.add_argument('--skip', '-sk', type=int, default=1, help="set how many sequences should be skipped. used for faster debugging. (default: 1)")
-argparser.add_argument('--yaw', '-y', type=float, default=10, help="reference yaw angle in deg (default: 20 deg)")
-argparser.add_argument('--pitch', '-p', type=float, default=5, help="reference pitch angle in deg (default: 10 deg)")
+argparser.add_argument('--yaw', '-y', type=float, default=5, help="reference yaw angle in deg (default: 20 deg)")
+argparser.add_argument('--pitch', '-p', type=float, default=2, help="reference pitch angle in deg (default: 10 deg)")
 args = argparser.parse_args()
 
 if __name__ == '__main__':
@@ -102,6 +102,7 @@ if __name__ == '__main__':
 
     # prepare directory structure
     Path(args.out).mkdir(parents=True, exist_ok=True)
+    f_out = os.path.join(args.out, args.filename)
 
     # prepare dataset
     n_workers = 1
@@ -134,7 +135,7 @@ if __name__ == '__main__':
 
         for i, batch in enumerate(dataloader):
             # NOTE batch: tensor of rank Bx(S-1)x6
-            print('{} / {}'.format(i, n_batch), end='\r', flush=True)
+            print('{} / {}'.format(i+1, n_batch), end='\r', flush=True)
             # for all further predictions only integrate the last pose, since overlap=seq_len-1
             batch = batch.numpy()
             for j, seq in enumerate(batch):
@@ -154,74 +155,83 @@ if __name__ == '__main__':
                 # accumulate coordinates
                 accum_coord += np.absolute([t[0,0],t[1,0],t[2,0]])
 
-        print('len(seq_motions):', len(seq_motions))
-        print('exp. len:', n_poses-overlap)
+    # 3D plot
+    fig3d = plt.figure()
+    ax = fig3d.add_subplot(1,1,1, projection='3d')
+    dirs = np.asarray(seq_directions)
+    # dirs[:,0,0] *= -1; dirs[:,1,0] *= -1;
+    marker_color = '#FF9F1C'
+    ax.scatter(-dirs[:,0,0], dirs[:,1,0], dirs[:,2,0], c=marker_color, marker='o', alpha=0.5)
+    d = np.asarray(ref_dirs); z = np.asarray([0]*d.shape[0]);
+    ax.quiver(z,z,z,d[:,0,0],d[:,1,0],d[:,2,0], normalize=True, arrow_length_ratio=0.1, length=0.75, color=marker_color, alpha=0.5)
+    ax.quiver(0,0,0,-1,0,0, normalize=True, arrow_length_ratio=0.1, length=0.25, color='r')
+    ax.quiver(0,0,0,0,1,0, normalize=True, arrow_length_ratio=0.1, length=0.25, color='g')
+    ax.quiver(0,0,0,0,0,1, normalize=True, arrow_length_ratio=0.1, length=0.25, color='b')
+    ax.set_xlabel('X'); ax.set_xlim([-1.0,1.0]);
+    ax.set_ylabel('Y'); ax.set_ylim([-1.0,1.0]);
+    ax.set_zlabel('Z'); ax.set_zlim([ 0.0,1.0]);
+    ax.view_init(elev=-45.0, azim=135.0)
 
-        # 3D plot
-        fig3d = plt.figure()
-        ax = fig3d.add_subplot(1,1,1, projection='3d')
-        dirs = np.asarray(seq_directions)
-        # dirs[:,0,0] *= -1; dirs[:,1,0] *= -1;
-        marker_color = '#FF9F1C'
-        ax.scatter(-dirs[:,0,0], dirs[:,1,0], dirs[:,2,0], c=marker_color, marker='o', alpha=0.5)
-        d = np.asarray(ref_dirs); z = np.asarray([0]*d.shape[0]);
-        ax.quiver(z,z,z,d[:,0,0],d[:,1,0],d[:,2,0], normalize=True, arrow_length_ratio=0.1, length=0.75, color=marker_color, alpha=0.5)
-        ax.quiver(0,0,0,-1,0,0, normalize=True, arrow_length_ratio=0.1, length=0.25, color='r')
-        ax.quiver(0,0,0,0,1,0, normalize=True, arrow_length_ratio=0.1, length=0.25, color='g')
-        ax.quiver(0,0,0,0,0,1, normalize=True, arrow_length_ratio=0.1, length=0.25, color='b')
-        ax.set_xlabel('X'); ax.set_xlim([-1.0,1.0]);
-        ax.set_ylabel('Y'); ax.set_ylim([-1.0,1.0]);
-        ax.set_zlabel('Z'); ax.set_zlim([ 0.0,1.0]);
-        ax.view_init(elev=-45.0, azim=135.0)
+    plt.savefig(f_out + '_3D_dist.png')
 
-        # 2D trajectory plots (projections)
-        fig2d = plt.figure()
-        # YX view
-        ax = fig2d.add_subplot(1,3,1)
-        ax.scatter(dirs[:,0,0], dirs[:,1,0], c=marker_color, alpha=0.5, marker='o')
-        ax.quiver(0,0,1,0, color='r', scale=4.0)
-        ax.quiver(0,0,0,1, color='g', scale=4.0)
-        # ZX view
-        ax = fig2d.add_subplot(1,3,2)
-        ax.scatter(dirs[:,0,0], dirs[:,2,0], c=marker_color, alpha=0.5, marker='o')
-        ax.quiver(0,0,1,0, color='r', scale=4.0)
-        ax.quiver(0,0,0,1, color='b', scale=4.0)
-        # YZ view
-        ax = fig2d.add_subplot(1,3,3)
-        ax.scatter(dirs[:,2,0], dirs[:,1,0], c=marker_color, alpha=0.5, marker='o')
-        ax.quiver(0,0,1,0, color='b', scale=4.0)
-        ax.quiver(0,0,0,1, color='g', scale=4.0)
+    print('gathered {} datapoints in total'.format(len(seq_motions)))
+    print('render plots...')
+    # 2D trajectory plots (projections)
+    fig2d = plt.figure()
+    # YX view
+    ax = fig2d.add_subplot(1,3,1)
+    ax.scatter(dirs[:,0,0], dirs[:,1,0], c=marker_color, alpha=0.5, marker='o')
+    ax.quiver(0,0,1,0, color='r', scale=4.0)
+    ax.quiver(0,0,0,1, color='g', scale=4.0)
+    # ZX view
+    ax = fig2d.add_subplot(1,3,2)
+    ax.scatter(dirs[:,0,0], dirs[:,2,0], c=marker_color, alpha=0.5, marker='o')
+    ax.quiver(0,0,1,0, color='r', scale=4.0)
+    ax.quiver(0,0,0,1, color='b', scale=4.0)
+    # YZ view
+    ax = fig2d.add_subplot(1,3,3)
+    ax.scatter(dirs[:,2,0], dirs[:,1,0], c=marker_color, alpha=0.5, marker='o')
+    ax.quiver(0,0,1,0, color='b', scale=4.0)
+    ax.quiver(0,0,0,1, color='g', scale=4.0)
 
-        # 2D angle plots
-        figAngle = plt.figure()
-        ax = figAngle.add_subplot(1,1,1)
-        #  normalize histogram
-        max_val = max(accum_euler); accum_euler = [ x/max_val for x in accum_euler ];
-        ax.bar(['roll', 'pitch', 'yaw'], [accum_euler[2], accum_euler[0], accum_euler[1]], color=marker_color)
+    plt.savefig(f_out + '_2D_dist.png')
 
-        # 2D translation plots
-        figTrans = plt.figure()
-        ax = figTrans.add_subplot(1,1,1)
-        #  normalize histogram
-        max_val = max(accum_coord); accum_coord = [ x/max_val for x in accum_coord ];
-        ax.bar(['x', 'y', 'z'], accum_coord, color=marker_color)
+    # 2D angle plots
+    figAngle = plt.figure()
+    ax = figAngle.add_subplot(1,1,1)
+    #  normalize histogram
+    max_val = max(accum_euler); accum_euler = [ x/max_val for x in accum_euler ];
+    ax.bar(['roll', 'pitch', 'yaw'], [accum_euler[2], accum_euler[0], accum_euler[1]], color=marker_color)
 
-        # histogram plot
-        figHist = plt.figure()
-        ax = figHist.add_subplot()
-        # normalize histogram
-        max_val = max(histogram)
-        histogram = [ x/max_val for x in histogram ]
-        ax.bar([str(x) for x in ref_eulers], histogram, color=marker_color)
+    plt.savefig(f_out + '_2D_angles.png')
 
-        # # reference directions plot
-        # figRef = plt.figure()
-        # ax = figRef.add_subplot(1,1,1, projection='3d')
-        # d = np.asarray(ref_dirs); z = np.asarray([0]*d.shape[0]);
-        # ax.quiver(z,z,z,d[:,0,0],d[:,1,0],d[:,2,0], normalize=True, arrow_length_ratio=0.1, length=0.25, color=marker_color)
-        # ax.set_xlabel('X'); ax.set_xlim([-0.5,0.5]);
-        # ax.set_ylabel('Y'); ax.set_ylim([-0.5,0.5]);
-        # ax.set_zlabel('Z'); ax.set_zlim([ 0.0,0.5]);
-        # ax.view_init(elev=-45.0, azim=135.0)
+    # 2D translation plots
+    figTrans = plt.figure()
+    ax = figTrans.add_subplot(1,1,1)
+    #  normalize histogram
+    max_val = max(accum_coord); accum_coord = [ x/max_val for x in accum_coord ];
+    ax.bar(['x', 'y', 'z'], accum_coord, color=marker_color)
 
-        plt.show()
+    plt.savefig(f_out + '_2D_trans.png')
+
+    # histogram plot
+    figHist = plt.figure()
+    ax = figHist.add_subplot()
+    # normalize histogram
+    max_val = max(histogram)
+    histogram = [ x/max_val for x in histogram ]
+    ax.bar([str(x) for x in ref_eulers], histogram, color=marker_color)
+
+    plt.savefig(f_out + '_dir_dist.png')
+
+    # # reference directions plot
+    # figRef = plt.figure()
+    # ax = figRef.add_subplot(1,1,1, projection='3d')
+    # d = np.asarray(ref_dirs); z = np.asarray([0]*d.shape[0]);
+    # ax.quiver(z,z,z,d[:,0,0],d[:,1,0],d[:,2,0], normalize=True, arrow_length_ratio=0.1, length=0.25, color=marker_color)
+    # ax.set_xlabel('X'); ax.set_xlim([-0.5,0.5]);
+    # ax.set_ylabel('Y'); ax.set_ylim([-0.5,0.5]);
+    # ax.set_zlabel('Z'); ax.set_zlim([ 0.0,0.5]);
+    # ax.view_init(elev=-45.0, azim=135.0)
+
+    plt.show()

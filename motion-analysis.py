@@ -93,6 +93,8 @@ argparser.add_argument('--batch_size', '-bs', type=int, default=8, help="batch s
 argparser.add_argument('--seq_len', '-sl', type=int, default=2, help="length of sub-sequences to sample from main sequence. The direction will be computed from first to last pose in the sub-sequence. (default: 2)")
 argparser.add_argument('--yaw', '-y', type=float, default=5, help="reference yaw angle in deg (default: 20 deg)")
 argparser.add_argument('--pitch', '-p', type=float, default=2, help="reference pitch angle in deg (default: 10 deg)")
+argparser.add_argument('--scanlines', '-scans', type=int, default=3, help="number of steps along pitch (default: 3)")
+argparser.add_argument('--steps', '-steps', type=int, default=3, help="number of steps along yaw (default: 3)")
 args = argparser.parse_args()
 
 if __name__ == '__main__':
@@ -113,13 +115,15 @@ if __name__ == '__main__':
     # prepare histograms
     v_forward = np.matrix([[0.0],[0.0],[1.0]], dtype=np.float)
     y = args.yaw; p = args.pitch;
-    ref_eulers = [ (p,0), (-p,y), (p,y), (0,y), (0,0), (0,-y), (p,-y), (-p,-y), (-p,0) ]
-    ref_dirs = [ euler_to_mat(to_rad(x+(0,)))*v_forward for x in ref_eulers ]
-    histogram = [0] * len(ref_eulers)
+    ref_eulers = [ [ (p,y) for y in np.linspace(args.yaw*args.steps, -args.yaw*args.steps, 2*args.steps+1)] for p in np.linspace(args.pitch*args.scanlines, -args.pitch*args.scanlines, 2*args.scanlines+1) ]
+    # ref_eulers = [[(p,y), (p,0), (p,-y)], [(0,y), (0,0), (0,-y)], [(-p,y), (-p,0), (-p,-y)]]
+    ref_dirs = [ [ euler_to_mat(to_rad(x+(0,)))*v_forward for x in sub_eulers ] for sub_eulers in ref_eulers ]
+    histogram = np.zeros((2*args.scanlines+1, 2*args.steps+1), dtype=float)
     accum_euler = np.array([0,0,0], dtype=np.float64)
     accum_coord = np.array([0,0,0], dtype=np.float64)
 
     # loop over sequences
+    seq_motions, seq_directions, seq_translations, seq_distances, seq_velocities = [], [], [], [], []
     for seq in args.sequences:
         n_poses = len(glob.glob(os.path.join(image_dir, seq, '*.png')))
         print('exp. #sub-sequences = {}, exp. #batches = {}'.format(n_poses-overlap, ceil((n_poses-overlap)/args.batch_size)))
@@ -130,7 +134,6 @@ if __name__ == '__main__':
         dataloader = DataLoader(dataset, batch_size=args.batch_size, drop_last=False, shuffle=False, num_workers=n_workers)
 
         # loop over sequence
-        seq_motions, seq_directions, seq_translations = [], [], []
         n_batch = len(dataloader)
 
         for i, batch in enumerate(dataloader):
@@ -146,10 +149,15 @@ if __name__ == '__main__':
                 # rotate forward unit direction by relative sequence transform
                 d = R * v_forward
                 # store motion data for plotting raw distribution
-                seq_motions.append(T); seq_directions.append(d); seq_translations.append(t);
+                p_s = T_s * np.matrix([[0.0],[0.0],[0.0],[1.0]], dtype=np.float)
+                p_e = T_e * np.matrix([[0.0],[0.0],[0.0],[1.0]], dtype=np.float)
+                length = dist(T_e[:3,3],T_s[:3,3])
+                seq_distances.append(length); seq_velocities.append(length*3.6/(0.1*(seq_len-1))); seq_directions.append(d); seq_motions.append(T); seq_translations.append(t);
                 # map to ref direction and integrate histogram
-                dists = [ dist(d,r) for r in ref_dirs ]
-                histogram[np.argmin(dists)] += 1
+                # dists = np.array([ [dist(d,r) for r in sub_dirs ] for sub_dirs in ref_dirs ])
+                # histogram[np.unravel_index(np.argmin(dists, axis=None), dists.shape)] += 1
+                dists = np.array([ [(d.T*r)[0,0] for r in sub_dirs ] for sub_dirs in ref_dirs ])
+                histogram[np.unravel_index(np.argmax(dists, axis=None), dists.shape)] += 1
                 # accumulate euler angles
                 accum_euler += np.absolute(mat_to_euler(R))
                 # accumulate coordinates
@@ -162,8 +170,8 @@ if __name__ == '__main__':
     # dirs[:,0,0] *= -1; dirs[:,1,0] *= -1;
     marker_color = '#FF9F1C'
     ax.scatter(-dirs[:,0,0], dirs[:,1,0], dirs[:,2,0], c=marker_color, marker='o', alpha=0.5)
-    d = np.asarray(ref_dirs); z = np.asarray([0]*d.shape[0]);
-    ax.quiver(z,z,z,d[:,0,0],d[:,1,0],d[:,2,0], normalize=True, arrow_length_ratio=0.1, length=0.75, color=marker_color, alpha=0.5)
+    d = np.asarray(ref_dirs); z = np.asarray([0]*d.shape[0]*d.shape[1]);
+    ax.quiver(z,z,z,d[:,:,0,0].flatten(),d[:,:,1,0].flatten(),d[:,:,2,0].flatten(), normalize=True, arrow_length_ratio=0.1, length=0.75, color=marker_color, alpha=0.5)
     ax.quiver(0,0,0,-1,0,0, normalize=True, arrow_length_ratio=0.1, length=0.25, color='r')
     ax.quiver(0,0,0,0,1,0, normalize=True, arrow_length_ratio=0.1, length=0.25, color='g')
     ax.quiver(0,0,0,0,0,1, normalize=True, arrow_length_ratio=0.1, length=0.25, color='b')
@@ -214,15 +222,33 @@ if __name__ == '__main__':
 
     plt.savefig(f_out + '_2D_trans.png')
 
-    # histogram plot
+    # histogram plot for directions
     figHist = plt.figure()
-    ax = figHist.add_subplot()
+    ax = figHist.add_subplot(111, projection='3d')
     # normalize histogram
-    max_val = max(histogram)
-    histogram = [ x/max_val for x in histogram ]
-    ax.bar([str(x) for x in ref_eulers], histogram, color=marker_color)
+    norm_val = np.sum(histogram)
+    histogram = np.array([ [ x/norm_val for x in row ] for row in histogram ])
+    for i, p in enumerate(np.linspace(args.pitch*args.scanlines, -args.pitch*args.scanlines, 2*args.scanlines+1)):
+        xs = np.linspace(args.yaw*args.steps, -args.yaw*args.steps, 2*args.steps+1)
+        ys = histogram[i]
+        ax.bar(xs, ys, zs=p, zdir='y', color=marker_color, alpha=0.8)
+    ax.set_xlabel('Yaw'); ax.set_ylabel('Pitch'); ax.set_zlabel('Relative Frequency');
 
-    plt.savefig(f_out + '_dir_dist.png')
+    plt.savefig(f_out + '_dir_hist.png')
+
+    # histogram plot for distances
+    figHistDist = plt.figure()
+    ax = figHistDist.add_subplot()
+    ax.hist(seq_distances, bins=10, color=marker_color, align='mid', rwidth=0.8, density=True)
+
+    plt.savefig(f_out + '_dist_hist.png')
+
+    # histogram plot for velocities
+    figHistDist = plt.figure()
+    ax = figHistDist.add_subplot()
+    ax.hist(seq_velocities, bins=10, color=marker_color, align='mid', rwidth=0.8, density=True)
+
+    plt.savefig(f_out + '_velo_hist.png')
 
     # # reference directions plot
     # figRef = plt.figure()

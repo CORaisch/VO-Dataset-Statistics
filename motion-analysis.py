@@ -123,7 +123,7 @@ if __name__ == '__main__':
     accum_coord = np.array([0,0,0], dtype=np.float64)
 
     # loop over sequences
-    seq_motions, seq_directions, seq_translations, seq_distances, seq_velocities = [], [], [], [], []
+    seq_motions, seq_directions, seq_translations, seq_distances = [], [], [], []
     for seq in args.sequences:
         n_poses = len(glob.glob(os.path.join(image_dir, seq, '*.png')))
         print('exp. #sub-sequences = {}, exp. #batches = {}'.format(n_poses-overlap, ceil((n_poses-overlap)/args.batch_size)))
@@ -152,16 +152,24 @@ if __name__ == '__main__':
                 p_s = T_s * np.matrix([[0.0],[0.0],[0.0],[1.0]], dtype=np.float)
                 p_e = T_e * np.matrix([[0.0],[0.0],[0.0],[1.0]], dtype=np.float)
                 length = dist(T_e[:3,3],T_s[:3,3])
-                seq_distances.append(length); seq_velocities.append(length*3.6/(0.1*(seq_len-1))); seq_directions.append(d); seq_motions.append(T); seq_translations.append(t);
+                seq_distances.append(length); seq_directions.append(d); seq_motions.append(T); seq_translations.append(t);
                 # map to ref direction and integrate histogram
-                # dists = np.array([ [dist(d,r) for r in sub_dirs ] for sub_dirs in ref_dirs ])
-                # histogram[np.unravel_index(np.argmin(dists, axis=None), dists.shape)] += 1
                 dists = np.array([ [(d.T*r)[0,0] for r in sub_dirs ] for sub_dirs in ref_dirs ])
                 histogram[np.unravel_index(np.argmax(dists, axis=None), dists.shape)] += 1
                 # accumulate euler angles
                 accum_euler += np.absolute(mat_to_euler(R))
                 # accumulate coordinates
                 accum_coord += np.absolute([t[0,0],t[1,0],t[2,0]])
+
+    # save params
+    with open(f_out + '_params.txt', 'w') as f:
+        f.write('Dataset: '+args.dataset+'\n')
+        f.write('Sequences: '+', '.join(args.sequences)+'\n')
+        f.write('Sequence Length: '+str(args.seq_len)+'\n')
+        f.write('Scanlines: '+str(args.scanlines)+'\n')
+        f.write('Steps: '+str(args.steps)+'\n')
+        f.write('Yaw: '+str(args.yaw)+'\n')
+        f.write('Pitch: '+str(args.pitch)+'\n')
 
     # 3D plot
     fig3d = plt.figure()
@@ -240,15 +248,11 @@ if __name__ == '__main__':
     figHistDist = plt.figure()
     ax = figHistDist.add_subplot()
     ax.hist(seq_distances, bins=10, color=marker_color, align='mid', rwidth=0.8, density=True)
+    ax.set_xlabel('Meter\nKm/h'); ax.set_ylabel('Relative Frequency');
+    labels = np.arange(0,3*(args.seq_len-1),1)
+    plt.xticks(labels, [ str(l)+'\n'+str(int(l*3.6/(0.1*(seq_len-1)))) for l in labels ])
 
     plt.savefig(f_out + '_dist_hist.png')
-
-    # histogram plot for velocities
-    figHistDist = plt.figure()
-    ax = figHistDist.add_subplot()
-    ax.hist(seq_velocities, bins=10, color=marker_color, align='mid', rwidth=0.8, density=True)
-
-    plt.savefig(f_out + '_velo_hist.png')
 
     # # reference directions plot
     # figRef = plt.figure()

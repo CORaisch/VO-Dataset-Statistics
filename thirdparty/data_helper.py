@@ -3,6 +3,7 @@ import os, glob, time
 # external dependencies
 import numpy as np
 import pandas as pd
+from thirdparty.utils import R_to_angle
 
 def get_data_info(image_dir, pose_dir, folder_list, seq_len_range, overlap, sample_times=1, max_step=1, pad_y=False, shuffle=False, sort=True):
     # check inputs
@@ -49,3 +50,18 @@ def get_data_info(image_dir, pose_dir, folder_list, seq_len_range, overlap, samp
     if sort:
         df = df.sort_values(by=['seq_len'], ascending=False)
     return df
+
+def create_pose_data(sequences, pose_dir):
+    start_t = time.time()
+    for seq in sequences:
+        fn = '{}/out_{}.txt'.format(pose_dir, seq)
+        if not os.path.exists(fn):
+            continue
+        print('Transforming {}...'.format(fn))
+        with open(fn) as f:
+            lines = [line.split('\n')[0] for line in f.readlines()]
+            poses = [ R_to_angle([float(value) for value in l.split(' ')]) for l in lines] # list of pose (pose=list of 12 floats)
+            poses = np.array(poses)
+            np.save(pose_dir+'/{}.npy'.format(seq), poses)
+            print('Sequence {}: shape={}'.format(seq, poses.shape))
+    print('elapsed time = {}'.format(time.time()-start_t))

@@ -14,10 +14,11 @@ from mpl_toolkits.mplot3d import Axes3D
 import matplotlib.pyplot as plt
 
 class Params():
-    def __init__(self, scanlines, steps, yaw, pitch, dist_th, seq_len, batch_size):
+    def __init__(self, scanlines, steps, yaw, pitch, dist_th, dir_th, seq_len, batch_size):
         self.scans = scanlines; self.steps = steps; self.yaw = yaw;
         self.pitch = pitch; self.seq_len = seq_len; self.batch_size = batch_size;
-        self.dist_th = dist_th; self.bins = np.arange(0.0, 3*(self.seq_len-1), 1);
+        self.dist_th = dist_th; self.dir_th = dir_th;
+        self.bins = np.linspace(0.0, 3*(self.seq_len-1), 15)
 
 class AbsolutePoseSequenceDataset(Dataset):
     '''yields sequences of absolute poses in 4x4 matrix format (SE(3))'''
@@ -89,6 +90,45 @@ def to_rad(a):
     ''''a: tuple input of floats'''
     return tuple( x * pi/180.0 for x in a )
 
+def plot_dir_error_distributions(f_out, params, e_hist, err_hist, t_hist):
+    # normalize histograms
+    t_hist /= np.sum(t_hist); e_hist /= np.sum(e_hist); err_hist /= np.sum(err_hist);
+
+    # plot pitch==0, yaw[:]
+    fig = plt.figure()
+    ax = fig.add_subplot(211)
+    # plot for pitch==0 -> hist[params.scans]
+    xs = np.linspace(params.yaw*params.steps, -params.yaw*params.steps, 2*params.steps+1)
+    w = (xs[1]-xs[0])*0.4
+    ax.bar(xs-w, t_hist[params.scans], width=w, align='edge', color='#0000FF', alpha=0.8)
+    ax.bar(xs, e_hist[params.scans], width=w, align='edge', color='#00FF00', alpha=0.8)
+    ax.plot(xs, err_hist[params.scans], '--', color='#FF0000', alpha=0.8)
+    ax.set_xlabel('Yaw'); ax.set_ylabel('Relative Frequency');
+    # set legend
+    import matplotlib.patches as mpatches
+    train_patch = mpatches.Patch(color='#0000FF', label='Train Distribution')
+    eval_patch = mpatches.Patch(color='#00FF00', label='Eval Distribution')
+    error_patch = mpatches.Patch(color='#FF0000', label='Error Distribution')
+    plt.legend(handles=[train_patch, eval_patch, error_patch])
+
+    # plot yaw==0, pitch[:]
+    ax = fig.add_subplot(212)
+    # plot for yaw==0 -> hist[:,steps]
+    xs = np.linspace(params.pitch*params.scans, -params.pitch*params.scans, 2*params.scans+1)
+    w = (xs[1]-xs[0])*0.4
+    ax.bar(xs-w, t_hist[:,params.steps], width=w, align='edge', color='#0000FF', alpha=0.8)
+    ax.bar(xs, e_hist[:,params.steps], width=w, align='edge', color='#00FF00', alpha=0.8)
+    ax.plot(xs, err_hist[:,params.steps], '--', color='#FF0000', alpha=0.8)
+    ax.set_xlabel('Pitch'); ax.set_ylabel('Relative Frequency');
+    # set legend
+    import matplotlib.patches as mpatches
+    train_patch = mpatches.Patch(color='#0000FF', label='Train Distribution')
+    eval_patch = mpatches.Patch(color='#00FF00', label='Eval Distribution')
+    error_patch = mpatches.Patch(color='#FF0000', label='Error Distribution')
+    plt.legend(handles=[train_patch, eval_patch, error_patch])
+
+    plt.savefig(f_out + '_dir_hist.png')
+
 def plot_dist_error_distributions(f_out, params, e_dist_hist, err_dist_hist, t_dist_hist):
     # prepare figure
     fig = plt.figure()
@@ -98,9 +138,10 @@ def plot_dist_error_distributions(f_out, params, e_dist_hist, err_dist_hist, t_d
     t_dist_hist /= np.sum(t_dist_hist); e_dist_hist /= np.sum(e_dist_hist); err_dist_hist /= np.sum(err_dist_hist);
 
     # plot training histogram
-    ax.bar(params.bins-0.4, t_dist_hist, width=0.4, align='edge', color='#0000FF', alpha=0.8)
+    w = (params.bins[1]-params.bins[0])*0.4
+    ax.bar(params.bins-w, t_dist_hist, width=w, align='edge', color='#0000FF', alpha=0.8)
     # plot eval histogram
-    ax.bar(params.bins, e_dist_hist, width=0.4, align='edge', color='#00FF00', alpha=0.8)
+    ax.bar(params.bins, e_dist_hist, width=w, align='edge', color='#00FF00', alpha=0.8)
     # plot error histogram
     err_dist_hist /= np.sum(err_dist_hist)
     # ax.plot(0.5*(params.bins[1:]+params.bins[:-1]), err_dist_hist[:-1], '--', color='#FF0000', alpha=0.8)
@@ -108,8 +149,8 @@ def plot_dist_error_distributions(f_out, params, e_dist_hist, err_dist_hist, t_d
 
     # set labels
     ax.set_xlabel('Meter\nKm/h'); ax.set_ylabel('Relative Frequency');
-    labels = np.arange(0,3*(params.seq_len-1),1)
-    plt.xticks(labels, [ str(l)+'\n'+str(int(l*3.6/(0.1*(params.seq_len-1)))) for l in labels ])
+    # labels = np.arange(0,3*(params.seq_len-1),1)
+    plt.xticks(params.bins, [ str('{:.1f}'.format(l))+'\n'+str(int(l*3.6/(0.1*(params.seq_len-1)))) for l in params.bins ])
 
     # set legend
     import matplotlib.patches as mpatches
@@ -120,8 +161,6 @@ def plot_dist_error_distributions(f_out, params, e_dist_hist, err_dist_hist, t_d
 
     # save and show plot
     plt.savefig(f_out + '_dist_hist.png')
-    plt.show()
-
 
 def compute_dataset_distributions(ds, sequences, params):
     # prepare dataset
@@ -234,19 +273,20 @@ def compute_error_distributions(gt, estimates, sequences, params):
                 T_s = np.matrix(subseq[0][0]); T_e = np.matrix(subseq[0][-1]);
                 T_s_est = np.matrix(subseq[1][0]); T_e_est = np.matrix(subseq[1][-1]);
                 T = T_e * inv(T_s); R = T[:3,:3]; t = T[:3,3];
+                T_est = T_e_est * inv(T_s_est); R_est = T_est[:3,:3]; t_est = T_est[:3,3];
                 # rotate forward unit direction by relative sequence transform
-                d = R * v_forward
+                d = R * v_forward; d_est = R_est * v_forward;
                 # store motion data for plotting raw distribution
                 p_s = T_s * np.matrix([[0.0],[0.0],[0.0],[1.0]], dtype=np.float)
                 p_e = T_e * np.matrix([[0.0],[0.0],[0.0],[1.0]], dtype=np.float)
                 # map to ref direction and integrate eval histogram
+                d_err = np.arccos(d.T * d_est); d_err = d_err if np.isfinite(d_err) else 0.0;
                 dists = np.array([ [(d.T*r)[0,0] for r in sub_dirs ] for sub_dirs in ref_dirs ])
                 idx = np.unravel_index(np.argmax(dists, axis=None), dists.shape)
-                e_hist[idx] += 1
-                # TODO compute err_hist: error histogram for rotations
+                e_hist[idx] += 1; err_hist[idx] += 0 if d_err <= params.dir_th else 1;
                 # compute distance error and map to histogram bin
                 length = dist(T_e[:3,3],T_s[:3,3]); est_length = dist(T_e_est[:3,3],T_s_est[:3,3]);
-                error = np.abs(length-est_length)**2
+                error = np.abs(length-est_length)
                 # accumulate GT and error distances
                 dist_idx = np.digitize(length,params.bins)-1
                 e_dist_hist[dist_idx] += 1; err_dist_hist[dist_idx] += 0 if error <= params.dist_th else 1;
@@ -280,6 +320,7 @@ argparser.add_argument('--pitch', '-p', type=float, default=2, help="reference p
 argparser.add_argument('--scanlines', '-scans', type=int, default=3, help="number of steps along pitch (default: 3)")
 argparser.add_argument('--steps', '-steps', type=int, default=3, help="number of steps along yaw (default: 3)")
 argparser.add_argument('--dist_th', '-dth', type=float, default=1.0, help="distance threshold used for distance error distribution(default: 3)")
+argparser.add_argument('--dir_th', '-dirth', type=float, default=1.0, help="direction threshold used for direction error distribution(default: 3)")
 args = argparser.parse_args()
 
 if __name__ == '__main__':
@@ -296,7 +337,7 @@ if __name__ == '__main__':
     f_out = os.path.join(args.out, args.filename)
 
     # make params
-    params = Params(args.scanlines, args.steps, args.yaw, args.pitch, args.dist_th, args.seq_len, args.batch_size)
+    params = Params(args.scanlines, args.steps, args.yaw, args.pitch, args.dist_th, args.dir_th, args.seq_len, args.batch_size)
 
     # compute distributions on training dataset
     t_hist, t_dist_hist, t_dirs, accum_coord, accum_euler = compute_dataset_distributions(args.train_dataset, args.train_sequences, params)
@@ -306,3 +347,5 @@ if __name__ == '__main__':
 
     # make plots
     plot_dist_error_distributions(f_out, params, e_dist_hist, err_dist_hist, t_dist_hist)
+    plot_dir_error_distributions(f_out, params, e_hist, err_hist, t_hist)
+    plt.show()

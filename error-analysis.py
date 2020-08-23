@@ -91,8 +91,11 @@ def to_rad(a):
     return tuple( x * pi/180.0 for x in a )
 
 def plot_dir_error_distributions(f_out, params, e_hist, err_hist, t_hist):
-    # normalize histograms
-    t_hist /= np.sum(t_hist); e_hist /= np.sum(e_hist); err_hist /= np.sum(err_hist);
+    # normalize histograms at center yaw location
+    yid = [params.scans][0]
+    err_hist_y = err_hist[yid].copy(); e_hist_y = e_hist[yid].copy(); t_hist_y = t_hist[yid].copy();
+    err_hist_y /= e_hist_y; err_hist_y = [ x if np.isfinite(x) else 0.0 for x in err_hist_y ];
+    t_hist_y /= np.sum(t_hist_y); e_hist_y /= np.sum(e_hist_y); err_hist_y /= np.sum(err_hist_y);
 
     # plot pitch==0, yaw[:]
     fig = plt.figure()
@@ -100,9 +103,9 @@ def plot_dir_error_distributions(f_out, params, e_hist, err_hist, t_hist):
     # plot for pitch==0 -> hist[params.scans]
     xs = np.linspace(params.yaw*params.steps, -params.yaw*params.steps, 2*params.steps+1)
     w = (xs[1]-xs[0])*0.4
-    ax.bar(xs-w, t_hist[params.scans], width=w, align='edge', color='#0000FF', alpha=0.8)
-    ax.bar(xs, e_hist[params.scans], width=w, align='edge', color='#00FF00', alpha=0.8)
-    ax.plot(xs, err_hist[params.scans], '--', color='#FF0000', alpha=0.8)
+    ax.bar(xs-w, t_hist_y, width=w, align='edge', color='#0000FF', alpha=0.8)
+    ax.bar(xs, e_hist_y, width=w, align='edge', color='#00FF00', alpha=0.8)
+    ax.plot(xs, err_hist_y, '--', color='#FF0000', alpha=0.8)
     ax.set_xlabel('Yaw'); ax.set_ylabel('Relative Frequency');
     # set legend
     import matplotlib.patches as mpatches
@@ -110,15 +113,21 @@ def plot_dir_error_distributions(f_out, params, e_hist, err_hist, t_hist):
     eval_patch = mpatches.Patch(color='#00FF00', label='Eval Distribution')
     error_patch = mpatches.Patch(color='#FF0000', label='Error Distribution')
     plt.legend(handles=[train_patch, eval_patch, error_patch])
+    plt.yscale('log')
 
     # plot yaw==0, pitch[:]
     ax = fig.add_subplot(212)
+    # normalize histograms at center pitch location
+    pid = [params.steps][0]
+    err_hist_p = err_hist[:,pid].copy(); e_hist_p = e_hist[:,pid].copy(); t_hist_p = t_hist[:,pid].copy();
+    err_hist_p /= e_hist_p; err_hist_p = [ x if np.isfinite(x) else 0.0 for x in err_hist_p ];
+    t_hist_p /= np.sum(t_hist_p); e_hist_p /= np.sum(e_hist_p); err_hist_p /= np.sum(err_hist_p);
     # plot for yaw==0 -> hist[:,steps]
     xs = np.linspace(params.pitch*params.scans, -params.pitch*params.scans, 2*params.scans+1)
     w = (xs[1]-xs[0])*0.4
-    ax.bar(xs-w, t_hist[:,params.steps], width=w, align='edge', color='#0000FF', alpha=0.8)
-    ax.bar(xs, e_hist[:,params.steps], width=w, align='edge', color='#00FF00', alpha=0.8)
-    ax.plot(xs, err_hist[:,params.steps], '--', color='#FF0000', alpha=0.8)
+    ax.bar(xs-w, t_hist_p, width=w, align='edge', color='#0000FF', alpha=0.8)
+    ax.bar(xs, e_hist_p, width=w, align='edge', color='#00FF00', alpha=0.8)
+    ax.plot(xs, err_hist_p, '--', color='#FF0000', alpha=0.8)
     ax.set_xlabel('Pitch'); ax.set_ylabel('Relative Frequency');
     # set legend
     import matplotlib.patches as mpatches
@@ -126,6 +135,7 @@ def plot_dir_error_distributions(f_out, params, e_hist, err_hist, t_hist):
     eval_patch = mpatches.Patch(color='#00FF00', label='Eval Distribution')
     error_patch = mpatches.Patch(color='#FF0000', label='Error Distribution')
     plt.legend(handles=[train_patch, eval_patch, error_patch])
+    plt.yscale('log')
 
     plt.savefig(f_out + '_dir_hist.png')
 
@@ -135,6 +145,7 @@ def plot_dist_error_distributions(f_out, params, e_dist_hist, err_dist_hist, t_d
     ax = fig.add_subplot()
 
     # norm hist data
+    err_dist_hist /= e_dist_hist; err_dist_hist = [ x if np.isfinite(x) else 0.0 for x in err_dist_hist ];
     t_dist_hist /= np.sum(t_dist_hist); e_dist_hist /= np.sum(e_dist_hist); err_dist_hist /= np.sum(err_dist_hist);
 
     # plot training histogram
@@ -283,13 +294,17 @@ def compute_error_distributions(gt, estimates, sequences, params):
                 d_err = np.arccos(d.T * d_est); d_err = d_err if np.isfinite(d_err) else 0.0;
                 dists = np.array([ [(d.T*r)[0,0] for r in sub_dirs ] for sub_dirs in ref_dirs ])
                 idx = np.unravel_index(np.argmax(dists, axis=None), dists.shape)
-                e_hist[idx] += 1; err_hist[idx] += 0 if d_err <= params.dir_th else 1;
+                e_hist[idx] += 1
+                err_hist[idx] += d_err
+                # err_hist[idx] += 0 if d_err <= params.dir_th else 1
                 # compute distance error and map to histogram bin
                 length = dist(T_e[:3,3],T_s[:3,3]); est_length = dist(T_e_est[:3,3],T_s_est[:3,3]);
                 error = np.abs(length-est_length)
                 # accumulate GT and error distances
                 dist_idx = np.digitize(length,params.bins)-1
-                e_dist_hist[dist_idx] += 1; err_dist_hist[dist_idx] += 0 if error <= params.dist_th else 1;
+                e_dist_hist[dist_idx] += 1
+                err_dist_hist[dist_idx] += error
+                # err_dist_hist[dist_idx] += 0 if error <= params.dist_th else 1
 
     # save params
     with open(f_out + '_params.txt', 'w') as f:
